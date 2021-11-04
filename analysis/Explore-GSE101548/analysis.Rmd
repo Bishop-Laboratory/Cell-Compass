@@ -1,0 +1,39 @@
+```{r message=FALSE}
+# Package names
+std_packages <- c("here", "tidyverse")
+bioc_packages <- c("DESeq2")
+packages <- c(std_packages, bioc_packages)
+
+# Install standard packages not yet installed
+installed_packages <- std_packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(std_packages[!installed_packages])
+}
+
+# Install Bioconductor packages not yet installed
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+installed_packages <- bioc_packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  BiocManager::install(bioc_packages[!installed_packages])
+}
+
+# Load packages
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+
+```{r}
+# Load raw count data
+raw_counts_path <- here("data", "counts.Rdata")
+if (!file.exists(raw_counts_path)) {
+  source(here("data", "get_data.R"))
+}
+load(raw_counts_path)
+```
+
+DESeq2 Vignette
+https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#why-un-normalized-counts
+
+
