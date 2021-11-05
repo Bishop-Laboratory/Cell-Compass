@@ -1,39 +1,204 @@
-```{r message=FALSE}
-# Package names
-std_packages <- c("here", "tidyverse")
-bioc_packages <- c("DESeq2")
-packages <- c(std_packages, bioc_packages)
+---
+title: "Cell Compass EDA"
+author: "James Dao"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cerulean
+---
 
-# Install standard packages not yet installed
-installed_packages <- std_packages %in% rownames(installed.packages())
-if (any(installed_packages == FALSE)) {
-  install.packages(std_packages[!installed_packages])
-}
+Links for convenience:
 
-# Install Bioconductor packages not yet installed
-if (!requireNamespace("BiocManager", quietly = TRUE))
-  install.packages("BiocManager")
+- DESeq2 Vignette
+  - https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+- Original Paper
+  - Short: https://pubmed.ncbi.nlm.nih.gov/32459171/
+  - Full: https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/32459171/
 
-installed_packages <- bioc_packages %in% rownames(installed.packages())
-if (any(installed_packages == FALSE)) {
-  BiocManager::install(bioc_packages[!installed_packages])
-}
 
-# Load packages
-invisible(lapply(packages, library, character.only = TRUE))
+```{r include=FALSE}
+library(here)
+library(EnsDb.Hsapiens.v86)
+library(DESeq2)
+library(pheatmap)
+library(tidyverse)
 ```
 
 
-```{r}
+```{r message=FALSE}
 # Load raw count data
 raw_counts_path <- here("data", "counts.Rdata")
+
 if (!file.exists(raw_counts_path)) {
   source(here("data", "get_data.R"))
 }
 load(raw_counts_path)
 ```
 
-DESeq2 Vignette
-https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#why-un-normalized-counts
+
+```{r}
+# Add cell grouping used by paper (mentioned in the description of fig. 1D)
+metadata <- metadata %>%
+  mutate(cell_group = case_when(
+    cell_type == "Fetal fibroblast" ~ "Fibroblast",
+    cell_type == "Adult - Primary skin" ~ "Fibroblast",
+    cell_type == "Embryonic stem cell" ~ "HUES_iPSCs",
+    cell_type == "Induced pluripotent stem cell" ~ "HUES_iPSCs",
+    cell_type == "Neural progenitor cell" ~ "NPCs",
+    cell_type == "neuron" ~ "Neurons"
+  )) %>%
+  mutate(deg_group = case_when(
+    source_name == "Skin" ~ "adult_primary_skin",
+    source_name == "iPSC-derived neurons" ~ "iPSC_derived_neurons",
+    TRUE ~ "untested"
+  ))
+
+
+# %>% mutate(  # So packages won't complain about spaces
+#     source_name = gsub("[ -]", "_", source_name)
+#   )
+
+# Get gene symbols to convert from Ensembl IDs
+ens2sym <- AnnotationDbi::select(
+  EnsDb.Hsapiens.v86,
+  keys = keys(EnsDb.Hsapiens.v86),
+  columns = c("SYMBOL")
+)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Create DESeq data objects for further analysis
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = metadata,
+  design = ~ deg_group  # not 100% sure about this
+)
+dds <- DESeq(dds, quiet = TRUE)
+
+vsd <- vst(dds, blind = TRUE)
+```
+
+# Recreating Figure 1D
+
+- We have decent distinct expression patterns and within-group uniformity
+- However, compared to the original figure, our `HUES_iPSCs` and `Neurons` clusters seemed to be swapped
+  - Possibly caused by using different underlying PCA algo
+  - Plausibly the same plot, just shown at a different orientation about the 3rd (or higher) dimensions
+
+```{r}
+pca_data <- plotPCA(
+  vsd,
+  intgroup = c("cell_group"),
+  returnData = TRUE,
+  ntop = 1000  # Paper says "top 1000 miRNAs with the highest variance across all samples"
+)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = cell_group)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed()
+```
+
+# Recreating Figure 1G
+
+Pretty much matches the paper.
+
+```{r}
+# Use the same ordering aa fig 1G in the original paper
+colname_order <- c(
+  "GSM2705984", "GSM2705985", "GSM2705983", "GSM2705987", "GSM2705988",
+  "GSM2705989", "GSM2705990", "GSM2705986", "GSM2705992", "GSM2705993",
+  "GSM2705994", "GSM2705995", "GSM2705991", "GSM2705997", "GSM2705998",
+  "GSM2705999", "GSM2706000", "GSM2705996"
+)
+
+# Use selected genes from paper
+neur_genes <- c(
+  "NCAM1", "MAP2", "PAX6", "NEUROG2", "NEUROG1",
+  "DCX", "TUBB3", "SOX2", "POU5F1", "NANOG"
+)
+
+rowname_order <- counts[matrixStats::rowSums2(counts) != 0, ] %>%
+  as.data.frame() %>%
+  rownames_to_column("GENEID") %>%
+  left_join(ens2sym, by = "GENEID") %>%
+  filter(SYMBOL %in% neur_genes) %>%
+  arrange(match(SYMBOL, neur_genes)) %>%
+  pull(GENEID)
+
+pheatmap(
+  assay(vsd)[rowname_order, colname_order],
+  labels_row = neur_genes,
+  annotation_col = select(metadata, cell_group),
+  fontsize_col = 8,
+  scale = "row",
+  cluster_rows = FALSE,
+  cluster_cols = FALSE
+)
+```
+
+# Enrichr
+
+## Compute log fold changes
+
+Expression levels (measured by log2FoldChange) are computed using `iPSC_derived_neurons_vs_adult_primary_skin`.
+
+- `iPSC_derived_neurons` uses 4 out of the 5 given neuron samples (HUES-derived neuron sample is excluded)
+- `adult_primary_skin` uses 2 out of the 3 given fibroblast samples (fetal fibroblast sample is excluded)
+
+Metadata link for convenience: https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA394766&o=acc_s%3Aa
+  
+```{r message=FALSE, warning=FALSE}
+# Perform LFC shrinkage and join gene symbols
+res_lfc <- lfcShrink(dds,
+    coef = "deg_group_iPSC_derived_neurons_vs_adult_primary_skin",
+    type = "apeglm", quiet = TRUE
+  ) %>%
+  as.data.frame() %>%
+  rownames_to_column("GENEID") %>%
+  left_join(ens2sym, by = "GENEID") %>%
+  column_to_rownames("GENEID")
+```
+
+## Enrichr links v1
+
+Over-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=e90d695972ab43ae34759f1b3a2d2e18
+
+- My layman eyes see a decent amount of pathways related to brain stuff, and a bunch of other pathways I don't understand
+
+Under-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=a7475202003c579570190f320f84a13a
+
+- I see some pathways related to aging/stress:
+  - Lysosome
+  - Proteins Involved in Osteoarthritis
+  - Proteins Involved in Myocardial Ischemia
+  - reactive oxygen species degradation Homo sapiens DETOX1-PWY-1
+
+```{r}
+# Get overexpressed symbols for Enrichr
+res_lfc %>%
+  drop_na() %>%
+  filter(padj < 0.01) %>%
+  filter(log2FoldChange > 0) %>%
+  select(SYMBOL) %>%
+  write_csv("pos.txt", quote = "none", col_names = FALSE)
+
+# Get underexpressed symbols for Enrichr
+res_lfc %>%
+  drop_na() %>%
+  filter(padj < 0.01) %>%
+  filter(log2FoldChange < 0) %>%
+  select(SYMBOL) %>%
+  write_csv("neg.txt", quote = "none", col_names = FALSE)
+```
+
+
+
+
 
 
