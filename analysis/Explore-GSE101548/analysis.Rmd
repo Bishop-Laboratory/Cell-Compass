@@ -1,0 +1,221 @@
+---
+title: "Cell Compass EDA"
+author: "James Dao"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cerulean
+---
+
+Links for convenience:
+
+- DESeq2 Vignette
+  - https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+- Original Paper
+  - Short: https://pubmed.ncbi.nlm.nih.gov/32459171/
+  - Full: https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/32459171/
+
+
+```{r include=FALSE}
+library(here)
+library(EnsDb.Hsapiens.v86)
+library(DESeq2)
+library(pheatmap)
+library(tidyverse)
+```
+
+
+```{r message=FALSE}
+# Load raw count data
+raw_counts_path <- here("data", "counts.Rdata")
+
+if (!file.exists(raw_counts_path)) {
+  source(here("data", "get_data.R"))
+}
+load(raw_counts_path)
+```
+
+
+```{r}
+# Add cell grouping used by paper (mentioned in the description of fig. 1D)
+metadata <- metadata %>%
+  mutate(cell_group = case_when(
+    cell_type == "Fetal fibroblast" ~ "Fibroblast",
+    cell_type == "Adult - Primary skin" ~ "Fibroblast",
+    cell_type == "Embryonic stem cell" ~ "HUES_iPSCs",
+    cell_type == "Induced pluripotent stem cell" ~ "HUES_iPSCs",
+    cell_type == "Neural progenitor cell" ~ "NPCs",
+    cell_type == "neuron" ~ "Neurons"
+  )) %>%   mutate(deg_group = case_when(
+    source_name == "Skin" ~ "adult_primary_skin",
+    source_name == "iPSCs" ~ "iPSCs",
+    TRUE ~ "untested"
+  ))
+
+  # mutate(  # So packages won't complain about spaces
+  #   source_name = gsub("[ -]", "_", source_name)
+  # )
+
+# Get gene symbols to convert from Ensembl IDs
+ens2sym <- AnnotationDbi::select(
+  EnsDb.Hsapiens.v86,
+  keys = keys(EnsDb.Hsapiens.v86),
+  columns = c("SYMBOL")
+)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Create DESeq data objects for further analysis
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData = metadata,
+  design = ~ deg_group  # not 100% sure about this
+)
+dds <- DESeq(dds, quiet = TRUE)
+
+vsd <- vst(dds, blind = TRUE)
+```
+
+# Recreating Figure 1D
+
+- We have decent distinct expression patterns and within-group uniformity
+- However, compared to the original figure, our `HUES_iPSCs` and `Neurons` clusters seemed to be swapped
+  - Possibly caused by using different underlying PCA algo
+  - Plausibly the same plot, just shown at a different orientation about the 3rd (or higher) dimensions
+
+```{r}
+pca_data <- plotPCA(
+  vsd,
+  intgroup = c("cell_group"),
+  returnData = TRUE,
+  ntop = 1000  # Paper says "top 1000 miRNAs with the highest variance across all samples"
+)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = cell_group)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed()
+```
+
+# Recreating Figure 1G
+
+Pretty much matches the paper.
+
+```{r}
+# Use the same ordering as fig 1G in the original paper
+colname_order <- c(
+  "GSM2705984", "GSM2705985", "GSM2705983", "GSM2705987", "GSM2705988",
+  "GSM2705989", "GSM2705990", "GSM2705986", "GSM2705992", "GSM2705993",
+  "GSM2705994", "GSM2705995", "GSM2705991", "GSM2705997", "GSM2705998",
+  "GSM2705999", "GSM2706000", "GSM2705996"
+)
+
+# Use selected genes from paper
+neur_genes <- c(
+  "NCAM1", "MAP2", "PAX6", "NEUROG2", "NEUROG1",
+  "DCX", "TUBB3", "SOX2", "POU5F1", "NANOG"
+)
+
+rowname_order <- counts[matrixStats::rowSums2(counts) != 0, ] %>%
+  as.data.frame() %>%
+  rownames_to_column("GENEID") %>%
+  left_join(ens2sym, by = "GENEID") %>%
+  filter(SYMBOL %in% neur_genes) %>%
+  arrange(match(SYMBOL, neur_genes)) %>%
+  pull(GENEID)
+
+pheatmap(
+  assay(vsd)[rowname_order, colname_order],
+  labels_row = neur_genes,
+  annotation_col = select(metadata, cell_group),
+  fontsize_col = 8,
+  scale = "row",
+  cluster_rows = FALSE,
+  cluster_cols = FALSE
+)
+```
+
+# Enrichr
+
+## Compute log fold changes
+
+Expression levels (measured by log2FoldChange) are computed using `iPSCs_vs_adult_primary_skin`.
+
+- `iPSCs` uses all 4 given samples
+- `adult_primary_skin` uses 2 out of the 3 given fibroblast samples (fetal fibroblast sample is excluded)
+
+Metadata link for convenience: https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA394766&o=acc_s%3Aa
+
+The datatable below shows the top 1000 DEGs by lowest adjusted p-value.  
+Positive log fold changes means that a given gene is more greatly expressed in `iPSCs` than in `adult_primary_skin`.
+  
+```{r message=FALSE, warning=FALSE}
+# Perform LFC shrinkage and join gene symbols
+res_lfc <- lfcShrink(dds,
+    coef = "deg_group_iPSCs_vs_adult_primary_skin",
+    type = "apeglm", quiet = TRUE
+  ) %>%
+  as.data.frame() %>%
+  rownames_to_column("GENEID") %>%
+  left_join(ens2sym, by = "GENEID") %>%
+  column_to_rownames("GENEID")
+
+res_lfc %>%
+  rownames_to_column("GENEID") %>%
+  select(SYMBOL, log2FoldChange, padj) %>%
+  slice_min(padj, n = 1000) %>%
+  mutate(log2FoldChange = signif(log2FoldChange, 4)) %>%
+  mutate(padj = signif(padj, 4)) %>%
+  DT::datatable()
+```
+
+## Enrichr links v2
+
+Over-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=777cbfdac04766bc95989ed6e56706bd
+
+- To my layman eyes, mostly looks like pathways related to early stage cell cycles and differentiation
+
+Under-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=ad94f7930a57b737afa32ad0063b7f19
+
+- If we click "Ontologies" -> "GO Biological Process 2021" -> "Table" and sort by Adjusted p-value, we see:
+  - cellular response to starvation (GO:0009267)
+  - cellular response to amino acid starvation (GO:0034198)
+  - positive regulation of transcription from RNA polymerase II promoter in response to stress (GO:0036003)
+  - ATF6-mediated unfolded protein response (GO:0036500)
+  - response to amino acid starvation (GO:1990928)
+  - cellular response to oxidative stress (GO:0034599)
+  - response to endoplasmic reticulum stress (GO:0034976)
+  - macroautophagy (GO:0016236)
+  - regulation of autophagy (GO:0010506)
+
+An interesting one is "ATF6-mediated unfolded protein response" which has OR=23.41 where most other pathways of single digit OR
+  
+
+```{r}
+# Get overexpressed symbols for Enrichr
+res_lfc %>%
+  drop_na() %>%
+  filter(padj < 0.01) %>%
+  filter(log2FoldChange > 0) %>%
+  select(SYMBOL) %>%
+  write_csv("pos.txt", quote = "none", col_names = FALSE)
+
+# Get underexpressed symbols for Enrichr
+res_lfc %>%
+  drop_na() %>%
+  filter(padj < 0.01) %>%
+  filter(log2FoldChange < 0) %>%
+  select(SYMBOL) %>%
+  write_csv("neg.txt", quote = "none", col_names = FALSE)
+```
+
+
+
+
+
+
