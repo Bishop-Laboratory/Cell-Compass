@@ -169,6 +169,8 @@ res_lfc %>%
   rownames_to_column("GENEID") %>%
   select(SYMBOL, log2FoldChange, padj) %>%
   slice_min(padj, n = 1000) %>%
+  mutate(log2FoldChange = signif(log2FoldChange, 4)) %>%
+  mutate(padj = signif(padj, 4)) %>%
   DT::datatable()
 ```
 
@@ -180,13 +182,18 @@ Over-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=777cbfdac04766bc9
 
 Under-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=ad94f7930a57b737afa32ad0063b7f19
 
-- I see a bunch of pathways probably related to aging/stress:
-  - Lysosome
-  - Protein processing in the endoplasmic reticulum
-  - Mitophagy
-  - Glycosaminoglycan degradation WP4815
-  - Proteins Involved in Osteoarthritis
-  - Proteins Involved in Photoaging
+- If we click "Ontologies" -> "GO Biological Process 2021" -> "Table" and sort by Adjusted p-value, we see:
+  - cellular response to starvation (GO:0009267)
+  - cellular response to amino acid starvation (GO:0034198)
+  - positive regulation of transcription from RNA polymerase II promoter in response to stress (GO:0036003)
+  - ATF6-mediated unfolded protein response (GO:0036500)
+  - response to amino acid starvation (GO:1990928)
+  - cellular response to oxidative stress (GO:0034599)
+  - response to endoplasmic reticulum stress (GO:0034976)
+  - macroautophagy (GO:0016236)
+  - regulation of autophagy (GO:0010506)
+
+An interesting one is "ATF6-mediated unfolded protein response" which has OR=23.41 where most other pathways of single digit OR
   
 
 ```{r}
