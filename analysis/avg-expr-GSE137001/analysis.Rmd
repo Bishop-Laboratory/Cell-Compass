@@ -10,10 +10,10 @@ output:
 ---
 
 ```{r}
+library(readxl)
 library(EnsDb.Hsapiens.v86)
 library(DESeq2)
 library(tidyverse)
-library(readxl)
 ```
 
 
@@ -97,38 +97,70 @@ stress_tpms <- tpms %>% filter(Name %in% stress_genes)
 
 
 ```{r}
-# Format data to plot
-df <- stress_tpms %>%
-  select(Name, contains("SKM_R")) %>%
+# Select only the SKM and OSKM samples
+# Scale the TPMs of each gene to be between 0 and 1
+# Note: I couldn't figure out how to scale row-wise, so I transposed instead
+scaled_tpms <- stress_tpms[3:41] %>%
+  select(contains("SKM_R")) %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate_all(scales::rescale) %>%  # Min-max scaling to be between 0 and 1
+  t() %>%
+  as_tibble() %>%
+  mutate(Gene = stress_tpms$Name) %>%
+  relocate(Gene)
+
+DT::datatable(scaled_tpms)
+```
+
+
+```{r}
+# Format data from wide to long for plotting
+df <- scaled_tpms %>%
   pivot_longer(
     contains("_"),
     names_to = c("Day", "Factors", "Rep"),
     names_pattern = "d(\\d+)_(\\w+)_R(\\d+)"
   ) %>%
-  rename(log_TPM = value) %>%
-  rename(Gene = Name) %>%
-  mutate(log_TPM = log10(1 + log_TPM)) %>%
+  rename(scaled_TPM = value) %>%
   mutate_if(is.character, as.factor)
 ```
 
 
 ```{r}
 df %>%
-  ggplot(aes(x = Day, y = log_TPM)) +
+  ggplot(aes(x = Day, y = scaled_TPM)) +
   stat_boxplot(geom ='errorbar', width = 0.5) +
   geom_boxplot() +
+  facet_wrap(~Factors) + 
+  geom_jitter(color = "blue", width = 0.05)
+```
+
+```{r}
+df %>%
+  ggplot(aes(x = Day, y = scaled_TPM, group = Gene)) +
+  geom_line(aes(color = Gene)) +
+  facet_wrap(~Factors + Rep)
+```
+
+```{r}
+df %>%
+  group_by(Factors, Day, Gene) %>%
+  summarise(mean_scaled_TPM = mean(scaled_TPM)) %>%
+  ggplot(aes(x = Day, y = mean_scaled_TPM, group = Gene)) +
+  geom_line(aes(color = Gene)) +
   facet_wrap(~Factors)
 ```
 
 
 
 ```{r}
-res <- aov(log_TPM ~ Day, data = df %>% filter(Factors == "OSKM"))
+res <- aov(scaled_TPM ~ Day, data = df %>% filter(Factors == "OSKM"))
 summary(res)
 ```
 
 ```{r}
-res <- aov(log_TPM ~ Day, data = df %>% filter(Factors == "SKM"))
+res <- aov(scaled_TPM ~ Day, data = df %>% filter(Factors == "SKM"))
 summary(res)
 ```
 
