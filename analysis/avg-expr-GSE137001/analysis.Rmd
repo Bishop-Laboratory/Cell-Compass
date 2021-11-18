@@ -9,11 +9,12 @@ output:
     theme: cerulean
 ---
 
-```{r}
+```{r include=FALSE}
 library(readxl)
 library(EnsDb.Hsapiens.v86)
 library(DESeq2)
 library(tidyverse)
+library(plotly)
 ```
 
 
@@ -41,6 +42,7 @@ metadata <- data.frame(sample_name = colnames(tpms_mat)) %>%
   column_to_rownames("sample_name")
 ```
 
+# PCA
 
 ```{r}
 # I don't think this transformation is correct
@@ -109,8 +111,6 @@ scaled_tpms <- stress_tpms[3:41] %>%
   as_tibble() %>%
   mutate(Gene = stress_tpms$Name) %>%
   relocate(Gene)
-
-DT::datatable(scaled_tpms)
 ```
 
 
@@ -126,6 +126,7 @@ df <- scaled_tpms %>%
   mutate_if(is.character, as.factor)
 ```
 
+# Boxplot
 
 ```{r}
 df %>%
@@ -136,22 +137,16 @@ df %>%
   geom_jitter(color = "blue", width = 0.05)
 ```
 
-```{r}
-df %>%
+# Lineplot
+
+```{r fig.width=8}
+ggp <- df %>%
   ggplot(aes(x = Day, y = scaled_TPM, group = Gene)) +
   geom_line(aes(color = Gene)) +
   facet_wrap(~Factors + Rep)
-```
 
-```{r}
-df %>%
-  group_by(Factors, Day, Gene) %>%
-  summarise(mean_scaled_TPM = mean(scaled_TPM)) %>%
-  ggplot(aes(x = Day, y = mean_scaled_TPM, group = Gene)) +
-  geom_line(aes(color = Gene)) +
-  facet_wrap(~Factors)
+ggplotly(ggp)
 ```
-
 
 
 ```{r}
