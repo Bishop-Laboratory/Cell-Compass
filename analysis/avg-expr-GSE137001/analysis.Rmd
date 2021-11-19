@@ -30,43 +30,56 @@ tpms <- read_excel(filename)
 
 
 ```{r}
-tpms_mat <- tpms %>% select(3:41) %>% as.matrix()
-
-metadata <- data.frame(sample_name = colnames(tpms_mat)) %>%
-  mutate(group = gsub("(d\\d+_|_R\\d)", "", sample_name)) %>%
-  mutate(days = case_when(
-    startsWith(sample_name, "d") ~ sub("d(\\d+).+", "\\1", sample_name),
+# Generate metadata
+metadata <- tibble(sample_name = colnames(tpms[0, 3:41])) %>%
+  mutate(state = case_when(
+    startsWith(sample_name, "d") ~ gsub("(d\\d+)_.+", "\\1", sample_name),
+    grepl("MEF", sample_name) ~ "MEF",
+    grepl("iPSC", sample_name) ~ "iPSC",
+    grepl("ESC", sample_name) ~ "ESC"
+  )) %>%
+  mutate(factors = case_when(
+    grepl("OSKM", sample_name) ~ "OSKM",
+    grepl("SKM", sample_name) ~ "SKM",
     TRUE ~ "NA"
   )) %>%
-  mutate(rep = gsub(".+R(\\d)", "\\1", sample_name)) %>%
-  column_to_rownames("sample_name")
+  mutate(adhesion = case_when(
+    grepl("Epcam", sample_name) ~ "Epcam",
+    grepl("GFP", sample_name) ~ "GFP",
+    TRUE ~ "NA"
+  )) %>%
+    mutate(rep = case_when(
+    grepl("_R1", sample_name) ~ "1",
+    grepl("_R2", sample_name) ~ "2"
+  )) %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(state = ordered(state,
+    levels = c("MEF", "d2", "d4", "d6", "d9", "d12", "iPSC", "ESC")
+  ))
 ```
+
 
 # PCA
 
 ```{r}
-# I don't think this transformation is correct
-trans_mat <- log10(1 + (tpms_mat %>% t()))
+# Log transform data for PCA
+tpms_mat <- tpms %>% select(3:41) %>% as.matrix() %>% t()
+trans_mat <- log10(1 + (tpms_mat))
 
-pca_res <- stats::prcomp(trans_mat)
+pca_res <- stats::prcomp(trans_mat) 
 
-pca_df <- pca_res$x %>%
+pca_tbl <- pca_res$x %>%
   as.data.frame() %>%
   rownames_to_column("sample_name") %>%
-  mutate(group = gsub("(d\\d+_|_R\\d)", "", sample_name)) %>%
-  mutate(days = case_when(
-    startsWith(sample_name, "d") ~ sub("d(\\d+).+", "\\1", sample_name),
-    TRUE ~ "NA"
-  ))
+  left_join(metadata, by = c("sample_name"))
 
-pca_df %>%
-  filter(group %in% c("SKM", "OSKM")) %>%
+pca_tbl %>%
   ggplot(aes(
-    x = PC1, y = PC2, color = days, shape = group
+    x = PC1, y = PC2, color = state, shape = factors
   )) + 
-  geom_point(size = 3)
+  geom_point(size = 3) +
+  geom_text(aes(label = state), hjust = -0.2, vjust = -0.2)
 ```
-
 
 
 ```{r}
@@ -99,65 +112,88 @@ stress_tpms <- tpms %>% filter(Name %in% stress_genes)
 
 
 ```{r}
-# Select only the SKM and OSKM samples
 # Scale the TPMs of each gene to be between 0 and 1
 # Note: I couldn't figure out how to scale row-wise, so I transposed instead
 scaled_tpms <- stress_tpms[3:41] %>%
-  select(contains("SKM_R")) %>%
   t() %>%
   as.data.frame() %>%
   mutate_all(scales::rescale) %>%  # Min-max scaling to be between 0 and 1
   t() %>%
   as_tibble() %>%
-  mutate(Gene = stress_tpms$Name) %>%
-  relocate(Gene)
+  mutate(gene = stress_tpms$Name) %>%
+  relocate(gene)
 ```
 
 
 ```{r}
-# Format data from wide to long for plotting
-df <- scaled_tpms %>%
+# Long format data to play nice with ggplot
+long_df <- scaled_tpms %>%
   pivot_longer(
-    contains("_"),
-    names_to = c("Day", "Factors", "Rep"),
-    names_pattern = "d(\\d+)_(\\w+)_R(\\d+)"
+    contains("_")
   ) %>%
-  rename(scaled_TPM = value) %>%
-  mutate_if(is.character, as.factor)
+  rename(sample_name = name) %>%
+  rename(scaled_tpm = value) %>%
+  left_join(metadata, by = "sample_name")
+
+# Fake MEF rows to include in facet wrap
+fake_rows <- long_df %>% filter(state == "MEF") %>% mutate(factors = "SKM") %>%
+  rbind(long_df %>% filter(state == "MEF") %>% mutate(factors = "OSKM"))
+  
 ```
+
 
 # Boxplot
 
 ```{r}
-df %>%
-  ggplot(aes(x = Day, y = scaled_TPM)) +
+long_df %>%
+  rbind(fake_rows) %>%  # So we see MEF data when facet wrapped by "factors"
+  filter(factors != "NA") %>%
+  ggplot(aes(x = state, y = scaled_tpm)) +
   stat_boxplot(geom ='errorbar', width = 0.5) +
   geom_boxplot() +
-  facet_wrap(~Factors) + 
-  geom_jitter(color = "blue", width = 0.05)
+  facet_wrap(~factors) + 
+  geom_jitter(color = "blue", width = 0.1)
 ```
 
-# Lineplot
+
+# Line plot
 
 ```{r fig.width=8}
-ggp <- df %>%
-  ggplot(aes(x = Day, y = scaled_TPM, group = Gene)) +
-  geom_line(aes(color = Gene)) +
-  facet_wrap(~Factors + Rep)
+ggp <- long_df %>%
+  filter(factors != "NA") %>%
+  rbind(fake_rows) %>%
+  group_by(factors, state, gene) %>%
+  summarize(
+    mean_tpm = mean(scaled_tpm),
+    max_tpm = max(scaled_tpm),
+    min_tpm = min(scaled_tpm),
+    .groups = "keep"
+  ) %>%
+  ungroup() %>%
+  ggplot(aes(
+    x = state,
+    y = mean_tpm,
+    ymin = min_tpm,
+    ymax = max_tpm,
+    group = factors,
+    color = factors
+  )) + 
+  geom_line() +
+  geom_ribbon(alpha = 0.5) +
+  facet_wrap(~gene, ncol = 2) +
+  xlab("scale_TPM")
 
 ggplotly(ggp)
 ```
 
 
-```{r}
-res <- aov(scaled_TPM ~ Day, data = df %>% filter(Factors == "OSKM"))
-summary(res)
-```
 
-```{r}
-res <- aov(scaled_TPM ~ Day, data = df %>% filter(Factors == "SKM"))
-summary(res)
-```
+
+
+
+
+
+
 
 
 
