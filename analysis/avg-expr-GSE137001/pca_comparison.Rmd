@@ -10,6 +10,9 @@ output:
 ---
 
 ```{r include=FALSE}
+library(EnsDb.Mmusculus.v79)
+library(DESeq2)
+library(tximport)
 library(readxl)
 library(tidyverse)
 ```
@@ -23,9 +26,6 @@ if (!file.exists(filename)) {
   download.file(url, filename)
 }
 supp_tpms <- read_excel(filename)
-
-# Load TPMs processed from sequencing
-proc_tpms <- read_csv("tpms.csv")
 ```
 
 ```{r}
@@ -89,17 +89,39 @@ pca_tbl %>%
   ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
 ```
 
+# Get TPMs From Reprocessed SRAs
+
+```{r}
+tx2sym <- AnnotationDbi::select(
+  EnsDb.Mmusculus.v79,
+  keys=keys(EnsDb.Mmusculus.v79),
+  columns = c("TXNAME", "SYMBOL")
+)
+
+run_ids <- list.dirs(
+  "reprocess/quants",
+  recursive = FALSE,
+  full.names = FALSE
+)
+
+# Keep only run_ids that exist in supplementary data
+run_ids <- run_ids[run_ids %in% metadata$run_id]
+
+paths <- file.path("reprocess/quants", run_ids, "quant.sf")
+names(paths) <- run_ids
+
+txi <- tximport(paths,
+  type = "salmon",
+  tx2gene = tx2sym %>% select(TXNAME, GENEID),
+  ignoreTxVersion = TRUE
+)
+```
+
 # PCA Using TPMs From Reprocessed SRAs
 
 ```{r}
-select_cols <- colnames(proc_tpms)[colnames(proc_tpms) %in% metadata$run_id]
-
-select_tpms <- proc_tpms %>%
-  #filter(gene_id %in% supp_tpms$`Gene ID`) %>%
-  select(all_of(select_cols))
-
 # Log transform data for PCA
-tpms_mat <- select_tpms %>% as.matrix() %>% t()
+tpms_mat <- txi$abundance %>% as.matrix() %>% t()
 trans_mat <- log2(1 + (tpms_mat))
 
 pca_res <- stats::prcomp(trans_mat) 
@@ -119,7 +141,6 @@ pca_tbl %>%
   xlab(paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")) +
   ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
 ```
-
 
 
 
