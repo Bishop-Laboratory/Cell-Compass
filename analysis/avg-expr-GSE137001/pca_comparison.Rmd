@@ -30,7 +30,7 @@ supp_tpms <- read_excel(filename)
 
 ```{r}
 # Get run_id, GSM code, sample_name conversion table
-run_meta <- read_tsv("run_metadata.txt")
+run_meta <- read_tsv("run_metadata.txt", show_col_types = FALSE)
 
 # Generate metadata from column names of supplied TPMs
 metadata <- tibble(sample_name = colnames(supp_tpms[0, 3:41])) %>%
@@ -89,7 +89,7 @@ pca_tbl %>%
   ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
 ```
 
-# Get TPMs From Reprocessed SRAs
+# Get tximport Object From Reprocessed SRAs
 
 ```{r}
 tx2sym <- AnnotationDbi::select(
@@ -117,12 +117,21 @@ txi <- tximport(paths,
 )
 ```
 
-# PCA Using TPMs From Reprocessed SRAs
+```{r}
+dds <- DESeqDataSetFromTximport(
+  txi,
+  metadata %>% arrange(run_id) %>% column_to_rownames("run_id"),
+  ~factors
+)
+
+vsd <- vst(dds, blind = TRUE)
+```
+
+# PCA Using Counts From Reprocessed SRAs
 
 ```{r}
 # Log transform data for PCA
-tpms_mat <- txi$abundance %>% as.matrix() %>% t()
-trans_mat <- log2(1 + (tpms_mat))
+trans_mat <- assay(vsd) %>% as.matrix() %>% t()
 
 pca_res <- stats::prcomp(trans_mat) 
 var_explained <- pca_res$sdev^2 / sum(pca_res$sdev^2)
@@ -141,6 +150,28 @@ pca_tbl %>%
   xlab(paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")) +
   ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
 ```
+
+`r paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")`  
+`r paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = "")`  
+`r paste("PC3: ", round(var_explained[3] * 100, digits = 2), "%", sep = "")`
+
+```{r fig.height=7, fig.width=8}
+plotly::plot_ly(pca_tbl,
+  x = ~PC1, y = ~PC2, z = ~PC3,
+  color = ~pca_tbl$state,
+  symbol = ~pca_tbl$factors,
+  marker = list(size = 10)
+) %>%
+  plotly::add_markers()
+```
+
+
+
+
+
+
+
+
 
 
 
