@@ -1,0 +1,139 @@
+---
+title: "Pairwise Comparisons (GSE137001)"
+author: "James Dao"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+    df_print: paged
+    theme: cerulean
+---
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+```
+
+```{r source, include=FALSE}
+# Load relevant data
+source(file.path(here::here(), "analysis/avg-expr-GSE137001", "get_lfc_dfs.R"))
+```
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+options(knitr.duplicate.label = "allow")
+knitr::opts_knit$set(output.dir = file.path(here::here(), "analysis", "avg-expr-GSE137001"))
+
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::knit_hooks$set(optipng = knitr::hook_optipng)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, 
+                      cache = TRUE, optipng='', cache.lazy = FALSE,
+                      echo = TRUE)
+```
+
+
+# Pathway Heatmaps (Enrichr) {.tabset}
+
+```{r enrichr}
+# Get enrichr results and save to file
+filename <- file.path(here::here(), "analysis", "avg-expr-GSE137001", "enriched_res.Rdata")
+
+padj_cutoff <- 0.01
+lfc_cutoff <- 0.5
+dbs <- c("GO_Biological_Process_2021")
+
+if (!file.exists(filename)) {
+  enriched_res <- lapply(lfc_dfs, function(df) {
+    genes <- df %>%
+      filter(padj <= padj_cutoff & abs(log2FoldChange) >= lfc_cutoff) %>%
+      pull(SYMBOL)
+    
+    return(enrichR::enrichr(genes, dbs))
+  })
+  save(enriched_res, file = filename)
+} else {
+  load(filename)
+}
+```
+
+
+
+
+## Combined Score
+
+```{r combined_score}
+# Extract combined scores from each enrichr result
+pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+
+combined_scores <- lapply(enriched_res, function(res) {
+  c_score <- res[["GO_Biological_Process_2021"]] %>%
+    filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+    arrange(Term) %>%
+    pull(Combined.Score)
+  
+  return(c_score)
+})
+
+combined_scores <- as.data.frame(combined_scores)
+
+row.names(combined_scores) <- enriched_res[[1]][["GO_Biological_Process_2021"]] %>%
+  filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+  arrange(Term) %>%
+  mutate(Term = str_wrap(Term, width = 60)) %>% 
+  pull(Term)
+
+pheatmap::pheatmap(
+  combined_scores,
+  cluster_cols = FALSE,
+  scale = "row",
+)
+```
+
+## -log10(adjusted p-value)
+
+```{r neglog10}
+# Extract combined scores from each enrichr result
+pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+
+combined_scores <- lapply(enriched_res, function(res) {
+  c_score <- res[["GO_Biological_Process_2021"]] %>%
+    filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+    arrange(Term) %>%
+    mutate(neglog10 = -log10(Adjusted.P.value)) %>% 
+    pull(neglog10)
+  
+  return(c_score)
+})
+
+combined_scores <- as.data.frame(combined_scores)
+
+row.names(combined_scores) <- enriched_res[[1]][["GO_Biological_Process_2021"]] %>%
+  filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+  arrange(Term) %>%
+  mutate(Term = str_wrap(Term, width = 60)) %>% 
+  pull(Term)
+
+pheatmap::pheatmap(
+  combined_scores,
+  cluster_cols = FALSE,
+  scale = "row",
+)
+```
+
+
+# DEGs and Volcano {.tabset}
+
+```{r child_docs, echo=FALSE, results='asis', cache=FALSE}
+res <- lapply(names(lfc_dfs), function(x) {
+  knitr::knit_child(
+    'template.Rmd', envir = environment(), quiet = TRUE
+  )
+})
+cat(unlist(res), sep = '\n')
+```
+
+
+
+
+
+
+

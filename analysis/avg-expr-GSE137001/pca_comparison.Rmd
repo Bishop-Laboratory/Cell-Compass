@@ -1,0 +1,180 @@
+---
+title: "PCA Comparison (GSE137001)"
+author: "James Dao"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cerulean
+---
+
+```{r include=FALSE}
+library(EnsDb.Mmusculus.v79)
+library(DESeq2)
+library(tximport)
+library(readxl)
+library(tidyverse)
+```
+
+
+```{r}
+# Load TPMs from supplementary files
+url <- "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE137001&format=file&file=GSE137001%5FTPM%5Freprogramming%5Fintermediates%2Exlsx"
+filename <- "GSE137001_TPM_reprogramming_intermediates.xlsx"
+if (!file.exists(filename)) {
+  download.file(url, filename)
+}
+supp_tpms <- read_excel(filename)
+```
+
+```{r}
+# Get run_id, GSM code, sample_name conversion table
+run_meta <- read_tsv("run_metadata.txt", show_col_types = FALSE)
+
+# Generate metadata from column names of supplied TPMs
+metadata <- tibble(sample_name = colnames(supp_tpms[0, 3:41])) %>%
+  mutate(state = case_when(
+    startsWith(sample_name, "d") ~ gsub("(d\\d+)_.+", "\\1", sample_name),
+    grepl("MEF", sample_name) ~ "MEF",
+    grepl("iPSC", sample_name) ~ "iPSC",
+    grepl("ESC", sample_name) ~ "ESC"
+  )) %>%
+  mutate(factors = case_when(
+    grepl("OSKM", sample_name) ~ "OSKM",
+    grepl("SKM", sample_name) ~ "SKM",
+    TRUE ~ "NA"
+  )) %>%
+  mutate(adhesion = case_when(
+    grepl("Epcam", sample_name) ~ "Epcam",
+    grepl("GFP", sample_name) ~ "GFP",
+    TRUE ~ "NA"
+  )) %>%
+    mutate(rep = case_when(
+    grepl("_R1", sample_name) ~ "1",
+    grepl("_R2", sample_name) ~ "2"
+  )) %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(state = ordered(state,
+    levels = c("MEF", "d2", "d4", "d6", "d9", "d12", "iPSC", "ESC")
+  ))
+
+# Join inferred metadata with run metadata
+metadata <- metadata %>%
+  left_join(run_meta, by = "sample_name")
+```
+
+# PCA Using TPMs From Supplementary Files
+
+```{r}
+# Log transform data for PCA
+tpms_mat <- supp_tpms %>% select(3:41) %>% as.matrix() %>% t()
+trans_mat <- log2(1 + (tpms_mat))
+
+pca_res <- stats::prcomp(trans_mat) 
+var_explained <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+pca_tbl <- pca_res$x %>%
+  as.data.frame() %>%
+  rownames_to_column("sample_name") %>%
+  left_join(metadata, by = c("sample_name"))
+
+pca_tbl %>%
+  ggplot(aes(
+    x = PC1, y = PC2, color = state, shape = factors
+  )) + 
+  geom_point(size = 3) +
+  geom_text(aes(label = state), hjust = -0.2, vjust = -0.2) +
+  xlab(paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")) +
+  ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
+```
+
+# Get tximport Object From Reprocessed SRAs
+
+```{r}
+tx2sym <- AnnotationDbi::select(
+  EnsDb.Mmusculus.v79,
+  keys=keys(EnsDb.Mmusculus.v79),
+  columns = c("TXNAME", "SYMBOL")
+)
+
+run_ids <- list.dirs(
+  "reprocess/quants",
+  recursive = FALSE,
+  full.names = FALSE
+)
+
+# Keep only run_ids that exist in supplementary data
+run_ids <- run_ids[run_ids %in% metadata$run_id]
+
+paths <- file.path("reprocess/quants", run_ids, "quant.sf")
+names(paths) <- run_ids
+
+txi <- tximport(paths,
+  type = "salmon",
+  tx2gene = tx2sym %>% select(TXNAME, GENEID),
+  ignoreTxVersion = TRUE
+)
+```
+
+```{r}
+dds <- DESeqDataSetFromTximport(
+  txi,
+  metadata %>% arrange(run_id) %>% column_to_rownames("run_id"),
+  ~factors
+)
+
+vsd <- vst(dds, blind = TRUE)
+```
+
+# PCA Using Counts From Reprocessed SRAs
+
+```{r}
+# Log transform data for PCA
+trans_mat <- assay(vsd) %>% as.matrix() %>% t()
+
+pca_res <- stats::prcomp(trans_mat) 
+var_explained <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+pca_tbl <- pca_res$x %>%
+  as.data.frame() %>%
+  rownames_to_column("run_id") %>%
+  left_join(metadata, by = c("run_id"))
+
+pca_tbl %>%
+  ggplot(aes(
+    x = PC1, y = PC2, color = state, shape = factors
+  )) + 
+  geom_point(size = 3) +
+  geom_text(aes(label = state), hjust = -0.2, vjust = -0.2) +
+  xlab(paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")) +
+  ylab(paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = ""))
+```
+
+`r paste("PC1: ", round(var_explained[1] * 100, digits = 2), "%", sep = "")`  
+`r paste("PC2: ", round(var_explained[2] * 100, digits = 2), "%", sep = "")`  
+`r paste("PC3: ", round(var_explained[3] * 100, digits = 2), "%", sep = "")`
+
+```{r fig.height=7, fig.width=8}
+plotly::plot_ly(pca_tbl,
+  x = ~PC1, y = ~PC2, z = ~PC3,
+  color = ~pca_tbl$state,
+  symbol = ~pca_tbl$factors,
+  marker = list(size = 10)
+) %>%
+  plotly::add_markers()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

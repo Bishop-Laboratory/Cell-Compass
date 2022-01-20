@@ -1,0 +1,204 @@
+---
+title: "Average TPM Across Time of Select Genes (GSE137001)"
+author: "James Dao"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cerulean
+---
+
+```{r include=FALSE}
+library(readxl)
+library(EnsDb.Hsapiens.v86)
+library(DESeq2)
+library(tidyverse)
+library(plotly)
+```
+
+
+```{r}
+# Download data
+url <- "https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE137001&format=file&file=GSE137001%5FTPM%5Freprogramming%5Fintermediates%2Exlsx"
+filename <- "GSE137001_TPM_reprogramming_intermediates.xlsx"
+if (!file.exists(filename)) {
+  download.file(url, filename)
+}
+tpms <- read_excel(filename)
+```
+
+
+```{r}
+# Generate metadata
+metadata <- tibble(sample_name = colnames(tpms[0, 3:41])) %>%
+  mutate(state = case_when(
+    startsWith(sample_name, "d") ~ gsub("(d\\d+)_.+", "\\1", sample_name),
+    grepl("MEF", sample_name) ~ "MEF",
+    grepl("iPSC", sample_name) ~ "iPSC",
+    grepl("ESC", sample_name) ~ "ESC"
+  )) %>%
+  mutate(factors = case_when(
+    grepl("OSKM", sample_name) ~ "OSKM",
+    grepl("SKM", sample_name) ~ "SKM",
+    TRUE ~ "NA"
+  )) %>%
+  mutate(adhesion = case_when(
+    grepl("Epcam", sample_name) ~ "Epcam",
+    grepl("GFP", sample_name) ~ "GFP",
+    TRUE ~ "NA"
+  )) %>%
+    mutate(rep = case_when(
+    grepl("_R1", sample_name) ~ "1",
+    grepl("_R2", sample_name) ~ "2"
+  )) %>%
+  mutate_if(is.character, as.factor) %>%
+  mutate(state = ordered(state,
+    levels = c("MEF", "d2", "d4", "d6", "d9", "d12", "iPSC", "ESC")
+  ))
+```
+
+
+# PCA
+
+```{r}
+# Log transform data for PCA
+tpms_mat <- tpms %>% select(3:41) %>% as.matrix() %>% t()
+trans_mat <- log10(1 + (tpms_mat))
+
+pca_res <- stats::prcomp(trans_mat) 
+
+pca_tbl <- pca_res$x %>%
+  as.data.frame() %>%
+  rownames_to_column("sample_name") %>%
+  left_join(metadata, by = c("sample_name"))
+
+pca_tbl %>%
+  ggplot(aes(
+    x = PC1, y = PC2, color = state, shape = factors
+  )) + 
+  geom_point(size = 3) +
+  geom_text(aes(label = state), hjust = -0.2, vjust = -0.2)
+```
+
+
+```{r}
+# Get gene list to filter
+stress_pathways <- c("GO:0036500")  # Just the ATF6 pathway
+# stress_pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+
+gostres <- gprofiler2::gost(stress_pathways)
+stress_ensg <- gostres$meta$genes_metadata$query$query_1$ensgs
+
+ens2sym <- AnnotationDbi::select(
+  EnsDb.Hsapiens.v86,
+  keys = keys(EnsDb.Hsapiens.v86),
+  columns = c("SYMBOL")
+)
+
+stress_genes <- ens2sym %>%
+  filter(GENEID %in% stress_ensg) %>%
+  pull(SYMBOL)
+```
+
+
+```{r}
+# Filter data for selected stress genes
+tpms$Name <- unlist(lapply(tpms$Name, toupper))  # Capitalize gene names
+cat("% stress genes in dataset:", 100*mean(stress_genes %in% tpms$Name))
+
+stress_tpms <- tpms %>% filter(Name %in% stress_genes)
+```
+
+
+```{r}
+# Scale the TPMs of each gene to be between 0 and 1
+# Note: I couldn't figure out how to scale row-wise, so I transposed instead
+scaled_tpms <- stress_tpms[3:41] %>%
+  t() %>%
+  as.data.frame() %>%
+  mutate_all(scales::rescale) %>%  # Min-max scaling to be between 0 and 1
+  t() %>%
+  as_tibble() %>%
+  mutate(gene = stress_tpms$Name) %>%
+  relocate(gene)
+```
+
+
+```{r}
+# Long format data to play nice with ggplot
+long_df <- scaled_tpms %>%
+  pivot_longer(
+    contains("_")
+  ) %>%
+  rename(sample_name = name) %>%
+  rename(scaled_tpm = value) %>%
+  left_join(metadata, by = "sample_name")
+
+# Fake MEF rows to include in facet wrap
+fake_rows <- long_df %>% filter(state == "MEF") %>% mutate(factors = "SKM") %>%
+  rbind(long_df %>% filter(state == "MEF") %>% mutate(factors = "OSKM"))
+  
+```
+
+
+# Boxplot
+
+```{r}
+long_df %>%
+  rbind(fake_rows) %>%  # So we see MEF data when facet wrapped by "factors"
+  filter(factors != "NA") %>%
+  ggplot(aes(x = state, y = scaled_tpm)) +
+  stat_boxplot(geom ='errorbar', width = 0.5) +
+  geom_boxplot() +
+  facet_wrap(~factors) + 
+  geom_jitter(color = "blue", width = 0.1)
+```
+
+
+# Line plot
+
+```{r fig.width=8}
+ggp <- long_df %>%
+  filter(factors != "NA") %>%
+  rbind(fake_rows) %>%
+  group_by(factors, state, gene) %>%
+  summarize(
+    mean_tpm = mean(scaled_tpm),
+    max_tpm = max(scaled_tpm),
+    min_tpm = min(scaled_tpm),
+    .groups = "keep"
+  ) %>%
+  ungroup() %>%
+  ggplot(aes(
+    x = state,
+    y = mean_tpm,
+    ymin = min_tpm,
+    ymax = max_tpm,
+    group = factors,
+    color = factors
+  )) + 
+  geom_line() +
+  geom_ribbon(alpha = 0.5) +
+  facet_wrap(~gene, ncol = 2) +
+  xlab("scale_TPM")
+
+ggplotly(ggp)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
