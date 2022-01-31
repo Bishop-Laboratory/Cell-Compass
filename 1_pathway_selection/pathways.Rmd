@@ -1,44 +1,47 @@
 ---
-title: "Cell Compass EDA"
+title: "Pathway Selection"
 author: "James Dao"
 output:
-  html_notebook:
-    toc: true
-    toc_float: true
+  html_document:
+    toc: yes
+    toc_float: yes
     code_folding: hide
+    df_print: paged
     theme: cerulean
+bibliography: refs/references.bib
+csl: refs/addiction-biology.csl
+link-citations: yes
 ---
 
-Links for convenience:
-
-- DESeq2 Vignette
-  - https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
-- Original Paper
-  - Short: https://pubmed.ncbi.nlm.nih.gov/32459171/
-  - Full: https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/32459171/
-
-
-```{r include=FALSE}
-library(here)
-library(EnsDb.Hsapiens.v86)
-library(DESeq2)
-library(pheatmap)
-library(tidyverse)
-```
-
-
-```{r message=FALSE}
-# Load raw count data
-raw_counts_path <- here("data", "counts.Rdata")
-
-if (!file.exists(raw_counts_path)) {
-  source(here("data", "get_data.R"))
-}
-load(raw_counts_path)
-```
-
-
 ```{r}
+# Load libraries
+suppressPackageStartupMessages({
+  library(here)
+  library(EnsDb.Hsapiens.v86)
+  library(DESeq2)
+  library(pheatmap)
+  library(tidyverse)
+})
+
+# Load raw count data and associated metadata
+source(here("1_pathway_selection", "data", "get_data.R"))
+load(here("1_pathway_selection", "data", "counts.Rdata"))
+```
+
+# Intro
+
+We will analyse bulk RNA-Seq data ([GSE101548](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE101548)) referenced by Prodromidou et al. (2020)[@Prodromidou2020], following these rough steps:
+
+- Perform DEG analysis with DESeq2
+- Select significant over-/under-expressed genes and pass them to the [Enrichr browser tool](https://maayanlab.cloud/Enrichr/)
+- From the Enrichr results, manually select any salient pathways possibly related to aging
+
+
+# Data Sanity Check {.tabset}
+
+We will sanity check the data we downloaded and processed by recreating some figures seen in the original paper.
+
+```{r message=FALSE, warning=FALSE}
 # Add cell grouping used by paper (mentioned in the description of fig. 1D)
 metadata <- metadata %>%
   mutate(cell_group = case_when(
@@ -54,37 +57,31 @@ metadata <- metadata %>%
     TRUE ~ "untested"
   ))
 
-  # mutate(  # So packages won't complain about spaces
-  #   source_name = gsub("[ -]", "_", source_name)
-  # )
-
 # Get gene symbols to convert from Ensembl IDs
 ens2sym <- AnnotationDbi::select(
   EnsDb.Hsapiens.v86,
   keys = keys(EnsDb.Hsapiens.v86),
   columns = c("SYMBOL")
 )
-```
 
-
-```{r message=FALSE, warning=FALSE}
 # Create DESeq data objects for further analysis
 dds <- DESeqDataSetFromMatrix(
   countData = counts,
   colData = metadata,
-  design = ~ deg_group  # not 100% sure about this
+  design = ~ deg_group
 )
 dds <- DESeq(dds, quiet = TRUE)
 
 vsd <- vst(dds, blind = TRUE)
 ```
 
-# Recreating Figure 1D
+
+## Recreating Figure 1D
 
 - We have decent distinct expression patterns and within-group uniformity
 - However, compared to the original figure, our `HUES_iPSCs` and `Neurons` clusters seemed to be swapped
-  - Possibly caused by using different underlying PCA algo
-  - Plausibly the same plot, just shown at a different orientation about the 3rd (or higher) dimensions
+  - Possibly caused by using different parameters in underlying PCA algorithm
+  - Most likely still the same plot, just shown at a different orientation about the 3rd (or higher) dimension
 
 ```{r}
 pca_data <- plotPCA(
@@ -102,9 +99,10 @@ ggplot(pca_data, aes(x = PC1, y = PC2, color = cell_group)) +
   coord_fixed()
 ```
 
-# Recreating Figure 1G
 
-Pretty much matches the paper.
+## Recreating Figure 1G
+
+Pretty much matches the original paper.
 
 ```{r}
 # Use the same ordering as fig 1G in the original paper
@@ -140,9 +138,10 @@ pheatmap(
 )
 ```
 
-# Enrichr
 
-## Compute log fold changes
+# Pathway Enrichment
+
+## Computing Log2 Fold Changes
 
 Expression levels (measured by log2FoldChange) are computed using `iPSCs_vs_adult_primary_skin`.
 
@@ -174,48 +173,52 @@ res_lfc %>%
   DT::datatable()
 ```
 
-## Enrichr links v2
+## Enrichr & Pathway Selection
+
+(Interesting aging pathways were selected manually.)
 
 Over-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=777cbfdac04766bc95989ed6e56706bd
 
-- To my layman eyes, mostly looks like pathways related to early stage cell cycles and differentiation
+- Used DEGs with p.adj < 0.01 and positive log2FoldChange
+- Mostly looks like pathways related to early stage cell cycles and differentiation
 
 Under-expressed: https://maayanlab.cloud/Enrichr/enrich?dataset=ad94f7930a57b737afa32ad0063b7f19
 
+- Used DEGs with p.adj < 0.01 and negative log2FoldChange
 - If we click "Ontologies" -> "GO Biological Process 2021" -> "Table" and sort by Adjusted p-value, we see:
-  - cellular response to starvation (GO:0009267)
-  - cellular response to amino acid starvation (GO:0034198)
-  - positive regulation of transcription from RNA polymerase II promoter in response to stress (GO:0036003)
-  - ATF6-mediated unfolded protein response (GO:0036500)
-  - response to amino acid starvation (GO:1990928)
-  - cellular response to oxidative stress (GO:0034599)
-  - response to endoplasmic reticulum stress (GO:0034976)
-  - macroautophagy (GO:0016236)
-  - regulation of autophagy (GO:0010506)
+  - cellular response to starvation ([GO:0009267](https://www.ebi.ac.uk/QuickGO/term/GO:0009267))
+  - cellular response to amino acid starvation ([GO:0034198](https://www.ebi.ac.uk/QuickGO/term/GO:0034198))
+  - positive regulation of transcription from RNA polymerase II promoter in response to stress ([GO:0036003](https://www.ebi.ac.uk/QuickGO/term/GO:0036003))
+  - ATF6-mediated unfolded protein response ([GO:0036500](https://www.ebi.ac.uk/QuickGO/term/GO:0036500))
+  - response to amino acid starvation ([GO:1990928](https://www.ebi.ac.uk/QuickGO/term/GO:1990928))
+  - cellular response to oxidative stress ([GO:0034599](https://www.ebi.ac.uk/QuickGO/term/GO:0034599))
+  - response to endoplasmic reticulum stress ([GO:0034976](https://www.ebi.ac.uk/QuickGO/term/GO:0034976))
+  - macroautophagy ([GO:0016236](https://www.ebi.ac.uk/QuickGO/term/GO:0016236))
+  - regulation of autophagy ([GO:0010506](https://www.ebi.ac.uk/QuickGO/term/GO:0010506))
 
 An interesting one is "ATF6-mediated unfolded protein response" which has OR=23.41 where most other pathways of single digit OR
   
 
 ```{r}
-# Get overexpressed symbols for Enrichr
-res_lfc %>%
-  drop_na() %>%
-  filter(padj < 0.01) %>%
-  filter(log2FoldChange > 0) %>%
-  select(SYMBOL) %>%
-  write_csv("pos.txt", quote = "none", col_names = FALSE)
+# Get overexpressed gene symbols for Enrichr
+# res_lfc %>%
+#   drop_na() %>%
+#   filter(padj < 0.01) %>%
+#   filter(log2FoldChange > 0) %>%
+#   select(SYMBOL) %>%
+#   write_csv("overexp_genelist.txt", quote = "none", col_names = FALSE)
 
-# Get underexpressed symbols for Enrichr
-res_lfc %>%
-  drop_na() %>%
-  filter(padj < 0.01) %>%
-  filter(log2FoldChange < 0) %>%
-  select(SYMBOL) %>%
-  write_csv("neg.txt", quote = "none", col_names = FALSE)
+# Get underexpressed gene symbols for Enrichr
+# res_lfc %>%
+#   drop_na() %>%
+#   filter(padj < 0.01) %>%
+#   filter(log2FoldChange < 0) %>%
+#   select(SYMBOL) %>%
+#   write_csv("underexp_genelist.txt", quote = "none", col_names = FALSE)
 ```
 
+---
 
+# References
 
-
-
-
+<div id="refs"></div>
