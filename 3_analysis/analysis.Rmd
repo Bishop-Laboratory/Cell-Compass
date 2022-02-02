@@ -1,0 +1,126 @@
+---
+title: "Analysis of GSE137001"
+author: "James Dao"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+    df_print: paged
+    theme: cerulean
+---
+
+```{r}
+Sys.setenv(`_R_S3_METHOD_REGISTRATION_NOTE_OVERWRITES_` = "false")
+
+suppressPackageStartupMessages({
+  library(here)
+  library(tidyverse)
+})
+
+# Load relevant data
+source(here("3_analysis", "data", "get_lfc_dfs.R"))
+load(here("3_analysis", "data", "lfc_dfs.RData"))
+source(here("3_analysis", "data", "get_enrichr_res.R"))
+load(here("3_analysis", "data", "enrichr_res.RData"))
+
+# knit options
+options(knitr.duplicate.label = "allow")
+```
+
+
+# Pathway Heatmaps (Enrichr Scores) {.tabset}
+
+```{r}
+# Extract combined scores/p-values from relevant enrichr results
+pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+
+odds_ratios <- lapply(enrichr_res, function(res) {
+  or <- res[["GO_Biological_Process_2021"]] %>%
+    filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+    arrange(Term) %>%
+    pull(Odds.Ratio)
+  
+  return(or)
+})
+odds_ratios <- as.data.frame(odds_ratios)
+
+neglog10_pvals <- lapply(enrichr_res, function(res) {
+  pval <- res[["GO_Biological_Process_2021"]] %>%
+    filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+    arrange(Term) %>%
+    mutate(neglog10 = -log10(Adjusted.P.value)) %>% 
+    pull(neglog10)
+  
+  return(pval)
+})
+neglog10_pvals <- as.data.frame(neglog10_pvals)
+
+combined_scores <- lapply(enrichr_res, function(res) {
+  c_score <- res[["GO_Biological_Process_2021"]] %>%
+    filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+    arrange(Term) %>%
+    pull(Combined.Score)
+  
+  return(c_score)
+})
+combined_scores <- as.data.frame(combined_scores)
+
+row.names(odds_ratios) <- enrichr_res[[1]][["GO_Biological_Process_2021"]] %>%
+  filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
+  arrange(Term) %>%
+  mutate(Term = str_wrap(Term, width = 60)) %>% 
+  pull(Term)
+
+row.names(neglog10_pvals) <- row.names(odds_ratios)
+row.names(combined_scores) <- row.names(odds_ratios)
+```
+
+## Odds Ratio
+
+```{r}
+pheatmap::pheatmap(
+  odds_ratios,
+  cluster_cols = FALSE,
+  scale = "row",
+)
+```
+
+## -log10(adjusted p-value)
+
+```{r}
+pheatmap::pheatmap(
+  neglog10_pvals,
+  cluster_cols = FALSE,
+  scale = "row",
+)
+```
+
+## Combined Score
+
+```{r}
+pheatmap::pheatmap(
+  combined_scores,
+  cluster_cols = FALSE,
+  scale = "row",
+)
+```
+
+
+# DEGs and Volcano {.tabset}
+
+```{r, echo=FALSE, results='asis', cache=FALSE}
+res <- lapply(names(lfc_dfs), function(x) {
+  knitr::knit_child(
+    here("3_analysis", "template.Rmd"),
+    envir = environment(),
+    quiet = TRUE
+  )
+})
+cat(unlist(res), sep = '\n')
+```
+
+
+
+
+

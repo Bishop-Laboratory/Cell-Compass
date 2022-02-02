@@ -1,0 +1,33 @@
+## `r x`
+
+```{r fig.height=7}
+res <- lfc_dfs[[x]]
+padj_cutoff <- 0.01
+lfc_cutoff <- 0.5
+
+EnhancedVolcano::EnhancedVolcano(
+  res,
+  lab = res$SYMBOL,
+  x = "log2FoldChange",
+  y = "padj",
+  pCutoff = padj_cutoff,
+  FCcutoff = lfc_cutoff,
+  subtitle = sprintf(
+    "Adjusted p-value cutoff = %.2f\n|Log2FoldChange| cutoff = %.1f",
+    padj_cutoff, lfc_cutoff
+  )
+)
+```
+
+
+```{r}
+res %>%
+  select(SYMBOL, log2FoldChange, padj) %>%
+  filter(padj <= padj_cutoff & abs(log2FoldChange) >= lfc_cutoff) %>%
+  arrange(padj) %>% 
+  DT::datatable() %>%
+  DT::formatSignif(columns = 2:3, digits = 3)
+```
+
+
+

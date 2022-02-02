@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+1_pathway_selection/data/counts.Rdata
+1_pathway_selection/data/GSE101548_RAW.tar
+1_pathway_selection/data/raws
+2_reprocess/.snakemake
+2_reprocess/gencode.vM10.transcripts.fa.gz
+2_reprocess/mm10_transcript_index
+2_reprocess/quants
+2_reprocess/sras
