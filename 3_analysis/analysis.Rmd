@@ -8,6 +8,9 @@ output:
     code_folding: hide
     df_print: paged
     theme: cerulean
+bibliography: refs/references.bib
+csl: refs/addiction-biology.csl
+link-citations: yes
 ---
 
 ```{r}
@@ -21,21 +24,35 @@ suppressPackageStartupMessages({
 # Load relevant data
 source(here("3_analysis", "data", "get_lfc_dfs.R"))
 load(here("3_analysis", "data", "lfc_dfs.RData"))
-source(here("3_analysis", "data", "get_enrichr_res.R"))
-load(here("3_analysis", "data", "enrichr_res.RData"))
+source(here("3_analysis", "data", "get_enrichr_over.R"))
+load(here("3_analysis", "data", "enrichr_over.RData"))
 
 # knit options
 options(knitr.duplicate.label = "allow")
 ```
 
+# Intro
+
+We will analyse bulk RNA-Seq data ([GSE137001](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE137001)) referenced by Velychko et al. (2019)[@Velychko2019], following these rough steps:
+
+- Reprocess the raw data ([PRJNA564252](https://www.ncbi.nlm.nih.gov/Traces/study/?acc=PRJNA564252&o=acc_s%3Aa)) using sra-tools, salmon, Snakemake and tximport
+  - See the `2_reprocess` directory for details on the workflow
+- Using MEFs as the base reference, perform DEG analysis with DESeq2 on every other timepoint
+- Select significant over-expressed genes and pass them to the Enrichr browser tool
+- Plot and tabulate DEGs (volcano plot and data table)
+
 
 # Pathway Heatmaps (Enrichr Scores) {.tabset}
 
-```{r}
-# Extract combined scores/p-values from relevant enrichr results
-pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+For each timepoint pair, we sent significant DEGs to [Enrichr](https://maayanlab.cloud/Enrichr/). A DEG is significant if it's adjusted p-value is less than 0.01, and absolute log2 fold chance is greater than 0.5.
 
-odds_ratios <- lapply(enrichr_res, function(res) {
+```{r}
+# Extract metrics from enrichr results
+# GO:0036500 is commented out as it didn't show up in the enrichr results for all timepoints
+# pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:0036500", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+pathways <- c("GO:0009267", "GO:0034198", "GO:0036003", "GO:1990928", "GO:0034599", "GO:0034976", "GO:0016236", "GO:0010506")
+
+odds_ratios <- lapply(enrichr_over, function(res) {
   or <- res[["GO_Biological_Process_2021"]] %>%
     filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
     arrange(Term) %>%
@@ -45,7 +62,7 @@ odds_ratios <- lapply(enrichr_res, function(res) {
 })
 odds_ratios <- as.data.frame(odds_ratios)
 
-neglog10_pvals <- lapply(enrichr_res, function(res) {
+neglog10_pvals <- lapply(enrichr_over, function(res) {
   pval <- res[["GO_Biological_Process_2021"]] %>%
     filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
     arrange(Term) %>%
@@ -56,7 +73,7 @@ neglog10_pvals <- lapply(enrichr_res, function(res) {
 })
 neglog10_pvals <- as.data.frame(neglog10_pvals)
 
-combined_scores <- lapply(enrichr_res, function(res) {
+combined_scores <- lapply(enrichr_over, function(res) {
   c_score <- res[["GO_Biological_Process_2021"]] %>%
     filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
     arrange(Term) %>%
@@ -66,7 +83,7 @@ combined_scores <- lapply(enrichr_res, function(res) {
 })
 combined_scores <- as.data.frame(combined_scores)
 
-row.names(odds_ratios) <- enrichr_res[[1]][["GO_Biological_Process_2021"]] %>%
+row.names(odds_ratios) <- enrichr_over[[1]][["GO_Biological_Process_2021"]] %>%
   filter(str_detect(Term, paste(pathways, collapse="|"))) %>%
   arrange(Term) %>%
   mutate(Term = str_wrap(Term, width = 60)) %>% 
@@ -82,6 +99,7 @@ row.names(combined_scores) <- row.names(odds_ratios)
 pheatmap::pheatmap(
   odds_ratios,
   cluster_cols = FALSE,
+  cluster_rows = FALSE,
   scale = "row",
 )
 ```
@@ -92,6 +110,7 @@ pheatmap::pheatmap(
 pheatmap::pheatmap(
   neglog10_pvals,
   cluster_cols = FALSE,
+  cluster_rows = FALSE,
   scale = "row",
 )
 ```
@@ -102,12 +121,13 @@ pheatmap::pheatmap(
 pheatmap::pheatmap(
   combined_scores,
   cluster_cols = FALSE,
+  cluster_rows = FALSE,
   scale = "row",
 )
 ```
 
 
-# DEGs and Volcano {.tabset}
+# Volcano Plots and DEG Tables {.tabset}
 
 ```{r, echo=FALSE, results='asis', cache=FALSE}
 res <- lapply(names(lfc_dfs), function(x) {
@@ -120,7 +140,10 @@ res <- lapply(names(lfc_dfs), function(x) {
 cat(unlist(res), sep = '\n')
 ```
 
+---
 
+# References
 
+<div id="refs"></div>
 
 

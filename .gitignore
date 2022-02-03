@@ -10,3 +10,7 @@
 2_reprocess/mm10_transcript_index
 2_reprocess/quants
 2_reprocess/sras
+3_analysis/data/enrichr_res.RData
+3_analysis/data/enrichr_under.RData
+3_analysis/data/get_enrichr_res.R
+3_analysis/data/get_enrichr_under.R
